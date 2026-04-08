@@ -1,0 +1,29 @@
+# ============================================
+# Test SSH Server — Lightweight Alpine + OpenSSH
+# ============================================
+# A minimal SSH server for testing the DeployAI agent's
+# SSH execution tool inside Docker Compose.
+
+FROM alpine:3.19
+
+# Install OpenSSH server and basic diagnostic tools
+RUN apk add --no-cache \
+    openssh-server \
+    bash \
+    coreutils \
+    procps \
+    curl \
+    && ssh-keygen -A \
+    && mkdir -p /root/.ssh \
+    && chmod 700 /root/.ssh
+
+# Configure SSH for root login with key-based auth
+RUN sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config && \
+    echo "root:testpassword" | chpasswd
+
+EXPOSE 22
+
+# The authorized_keys file will be mounted via docker-compose
+CMD ["/usr/sbin/sshd", "-D", "-e"]

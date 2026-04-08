@@ -1,0 +1,47 @@
+[project]
+name = "deploy-agent"
+version = "0.1.0"
+description = "AI-powered Linux server deployment agent using LangGraph"
+requires-python = ">=3.11"
+dependencies = [
+    # AI / LangChain
+    "langgraph>=0.4",
+    "langchain-google-genai>=1.0",
+    "langchain-ollama>=0.3",
+    "langchain-core>=0.3",
+    
+    # SSH
+    "paramiko>=3.5",
+    
+    # Database
+    "psycopg2-binary>=2.9",
+    
+    # CLI
+    "typer[all]>=0.15",
+    "rich>=13.0",
+    
+    # Config
+    "python-dotenv>=1.0",
+    "pydantic-settings>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+]
+
+[project.scripts]
+deploy-ai = "src.cli.app:app"
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
