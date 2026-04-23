@@ -1,55 +1,118 @@
 """
-Main LangGraph — The deployment agent state machine.
+Graph builder — compiles the multi-agent LangGraph state machine.
 
-Phase 1 graph structure (simple):
-    START → ReAct Agent (with tools) → END
-
-The ReAct agent handles the full Think → Act → Observe loop internally
-via LangGraph's create_react_agent, which:
-1. Sends messages to LLM
-2. If LLM returns tool calls → executes them → adds results → loops back
-3. If LLM returns a final text response → ends
-
-Phase 2 will break this into separate Planner → Executor → Reviewer nodes.
+Architecture:
+  START → Planner → Executor ⇄ Tools → Reviewer → END
+                                          ↓ (rejected)
+                                       Planner (retry)
 """
 
 from __future__ import annotations
 
-from langgraph.prebuilt import create_react_agent  # noqa: deprecation
+from langgraph.graph import END, START, StateGraph
+from langgraph.prebuilt import ToolNode
+from langgraph.checkpoint.memory import MemorySaver
 
-from src.graph.nodes.agent import get_llm, SYSTEM_PROMPT
+from src.graph.state import AgentState
 from src.tools import ALL_TOOLS
-from src.config import settings
+from src.graph.nodes.planner import planner_node
+from src.graph.nodes.executor import executor_node
+from src.graph.nodes.reviewer import reviewer_node
+
+
+# ──────────────────────────────────────────────
+# Routing functions
+# ──────────────────────────────────────────────
+
+
+def _route_after_executor(state: AgentState) -> str:
+    """Determine where to go after the executor finishes a cycle.
+
+    Returns:
+        "tools"    — Executor generated a tool call; execute it.
+        "executor" — More plan steps remain; loop back.
+        "reviewer" — All steps exhausted; validate results.
+    """
+    messages = state.get("messages", [])
+
+    # Did the executor request a tool call?
+    if (
+        messages
+        and hasattr(messages[-1], "tool_calls")
+        and messages[-1].tool_calls
+    ):
+        return "tools"
+
+    # Are there remaining steps?
+    current_step = state.get("current_step", 0)
+    plan = state.get("plan", [])
+
+    if current_step < len(plan):
+        return "executor"
+
+    return "reviewer"
+
+
+def _route_after_reviewer(state: AgentState) -> str:
+    """Determine if the deployment succeeded or needs a retry.
+
+    Returns:
+        END       — Reviewer approved; we're done.
+        "planner" — Reviewer rejected; re-plan from errors.
+    """
+    if state.get("review_status") == "approved":
+        return END
+    return "planner"
+
+
+# ──────────────────────────────────────────────
+# Graph compilation
+# ──────────────────────────────────────────────
 
 
 def build_graph():
-    """
-    Build and compile the LangGraph state machine.
-    
-    Returns a compiled graph that can be invoked with:
-        graph.invoke({"messages": [("user", "check status of my server")]})
-    
-    The create_react_agent utility builds a graph that:
-    1. Takes user messages
-    2. Sends to LLM with tools bound
-    3. If LLM wants to call tools → executes them → feeds results back
-    4. Repeats until LLM gives a final text answer
-    """
-    llm = get_llm()
+    """Build and compile the multi-agent LangGraph state machine.
 
-    from langgraph.checkpoint.memory import MemorySaver
-    
-    memory = MemorySaver()
-    # create_react_agent builds the full ReAct loop:
-    #   START → agent (LLM call) → should_continue?
-    #                                 ├─ tool_calls → tool_executor → agent (loop)
-    #                                 └─ no tool_calls → END
-    graph = create_react_agent(
-        model=llm,
-        tools=ALL_TOOLS,
-        prompt=SYSTEM_PROMPT,
-        checkpointer=memory,
-        interrupt_before=["tools"],
+    Returns:
+        A compiled LangGraph with checkpointing and HITL interrupts.
+    """
+    workflow = StateGraph(AgentState)
+
+    # ── Register nodes ───────────────────────
+    workflow.add_node("planner", planner_node)
+    workflow.add_node("executor", executor_node)
+    workflow.add_node("reviewer", reviewer_node)
+    workflow.add_node("tools", ToolNode(ALL_TOOLS))
+
+    # ── Define edges ─────────────────────────
+    # 1. Entry: START → Planner → Executor
+    workflow.add_edge(START, "planner")
+    workflow.add_edge("planner", "executor")
+
+    # 2. Execution loop: Executor ⇄ Tools
+    workflow.add_conditional_edges(
+        "executor",
+        _route_after_executor,
+        {
+            "tools": "tools",
+            "executor": "executor",
+            "reviewer": "reviewer",
+        },
+    )
+    workflow.add_edge("tools", "executor")
+
+    # 3. Validation: Reviewer → END or retry
+    workflow.add_conditional_edges(
+        "reviewer",
+        _route_after_reviewer,
+        {
+            END: END,
+            "planner": "planner",
+        },
     )
 
-    return graph
+    # ── Compile ──────────────────────────────
+    return workflow.compile(
+        checkpointer=MemorySaver(),
+        interrupt_before=["tools"],  # HITL: pause before destructive ops
+    )

@@ -1,1 +1,1 @@
-"""Graph package."""
+"""Graph package — LangGraph state machine definitions."""

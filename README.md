@@ -20,11 +20,72 @@ The agent acts upon the world via a suite of narrowly scoped, explicitly defined
 - **SSH Tooling**: Allows the agent to open secure shells into target nodes, authenticate, execute diagnostics (`df -h`, `top`, etc.), and change file permissions autonomously—strictly adhering to its HITL permissions.
 - **Database Tooling**: Capable of querying internal state, deployment histories, and configurations from the database.
 
-## 🚀 Multi-Agent Future
+## 🔌 MCP Server (Model Context Protocol)
 
-The current implementation lays the groundwork for a broader **Multi-Agent Architecture** (detailed in `multi_agent_plan.md`):
-- **Specialized Sub-agents**: Future updates will introduce discrete agents specialized for networking, database management, and cloud orchestration.
-- **Supervisor-Worker Paradigms**: Utilizing LangGraph's multi-actor graph capabilities to route complex objectives among the appropriate highly-specialized workers.
+DeployAI exposes its infrastructure tools as an **MCP Server**, allowing any MCP-compatible client (Claude Desktop, Cursor, Windsurf, VS Code Copilot) to use them directly.
+
+### Available MCP Tools
+| Tool | Description |
+|------|-------------|
+| `ssh_execute` | Execute shell commands on remote Linux servers via SSH |
+| `get_server_info` | Look up a server by hostname, ID, or IP address |
+| `list_all_servers` | List all enrolled servers with status |
+
+### Available Resources
+- `deployai://config/status` — Current agent configuration summary
+
+### Available Prompts
+- `server_health_check` — Full diagnostic prompt for a server
+- `deploy_service` — Deployment workflow prompt
+
+### Running the MCP Server
+
+**Docker (SSE transport — recommended for remote access):**
+```bash
+docker-compose up -d mcp-server
+# Server available at http://localhost:8811/sse
+```
+
+**Local (stdio transport — for Claude Desktop / Cursor):**
+```bash
+deploy-ai mcp                    # stdio mode (default)
+deploy-ai mcp --transport sse    # SSE mode
+```
+
+### Client Configuration
+
+**Claude Desktop** (`claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "deploy-ai": {
+      "command": "deploy-ai",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+**Claude Desktop (Docker/SSE):**
+```json
+{
+  "mcpServers": {
+    "deploy-ai": {
+      "transport": "sse",
+      "url": "http://localhost:8811/sse"
+    }
+  }
+}
+```
+
+## 🚀 Multi-Agent Architecture
+
+The current implementation uses a **Multi-Agent Architecture** (detailed in `multi_agent_plan.md`):
+- **Planner**: Analyzes targets, writes sequential game plans
+- **Executor**: Reads exact steps, runs SSH commands via tools
+- **Reviewer**: Reads tool outputs, approves or routes back to Planner
+
+Future updates will introduce specialized sub-agents for networking, database management, and cloud orchestration.
 
 ## 📂 Project Structure
 
@@ -33,10 +94,14 @@ The current implementation lays the groundwork for a broader **Multi-Agent Archi
 │   ├── graph/          # LangGraph definitions, nodes, state, and routing edges
 │   ├── tools/          # Agent-callable functions (ssh, database queries)
 │   ├── memory/         # Persistent graph state and prompt histories
-│   └── mcp_server/     # MCP (Model Context Protocol) integrations
+│   ├── mcp_server/     # MCP Server — exposes tools via Model Context Protocol
+│   │   └── server.py   # FastMCP server with tools, resources, and prompts
+│   └── cli/            # Typer CLI (chat, run, mcp, status commands)
 ├── multi_agent_plan.md # Roadmap for the multi-agent expansion 
 ├── tests/              # Unit testing for graph state transitions and tools
-├── docker-compose.yml  # Local testing orchestrator and test-server instances
+├── Dockerfile          # Agent container
+├── Dockerfile.mcp      # MCP server container (SSE transport)
+├── docker-compose.yml  # Full stack orchestrator
 └── pyproject.toml      # Configuration and dependencies
 ```
 
@@ -61,3 +126,4 @@ This deploys the agent alongside a hardened dummy server that the agent can conn
 pip install -e .[test]
 pytest
 ```
+

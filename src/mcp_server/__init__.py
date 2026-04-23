@@ -1,1 +1,1 @@
-"""MCP Server package — placeholder for Phase 3."""
+"""MCP Server package — Expose DeployAI tools over Model Context Protocol."""

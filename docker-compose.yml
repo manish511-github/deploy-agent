@@ -88,6 +88,45 @@ services:
       retries: 3
 
   # ──────────────────────────────────
+  # MCP Server (Model Context Protocol)
+  # ──────────────────────────────────
+
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    container_name: deployai-mcp-server
+    restart: unless-stopped
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-lsm_user}:${POSTGRES_PASSWORD:-lsm_password}@postgres:5432/${POSTGRES_DB:-linux_server_manager}
+      SSH_KEY_PATH: /root/.ssh/id_ed25519
+      SSH_DEFAULT_USER: ${SSH_DEFAULT_USER:-root}
+      SSH_TIMEOUT: ${SSH_TIMEOUT:-30}
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:1.5b}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0}
+    ports:
+      - "${MCP_PORT:-8811}:8811"
+    volumes:
+      - ./test_ssh_key:/root/.ssh/id_ed25519:ro
+      - ./test_ssh_key.pub:/root/.ssh/id_ed25519.pub:ro
+      - ./src:/app/src
+    depends_on:
+      postgres:
+        condition: service_healthy
+      test-server:
+        condition: service_healthy
+    networks:
+      - deployai-network
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8811/sse\")' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+
+  # ──────────────────────────────────
   # AI Agent
   # ──────────────────────────────────
 
@@ -101,6 +140,7 @@ services:
     tty: true                  # Allocate a TTY
     environment:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
       DATABASE_URL: postgresql://${POSTGRES_USER:-lsm_user}:${POSTGRES_PASSWORD:-lsm_password}@postgres:5432/${POSTGRES_DB:-linux_server_manager}
       SSH_KEY_PATH: /root/.ssh/id_ed25519
