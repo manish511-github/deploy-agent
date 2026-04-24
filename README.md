@@ -2,6 +2,8 @@
 
 An autonomous, AI-powered system administrator built on LangGraph. DeployAI is designed to abstract away the toil of infrastructure management, server monitoring, and continuous deployment through dynamic, context-aware agentic workflows.
 
+https://github.com/user-attachments/assets/6a6be621-5f77-455d-befc-9252a135ee59
+
 ## 🧠 Agentic Architecture
 
 At the core of DeployAI is a State Graph (via **LangGraph**), which gives the agent persistent memory, sequential reasoning paths, and strict operational boundaries.
