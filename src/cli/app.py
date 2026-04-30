@@ -7,14 +7,18 @@ user input (Typer), and delegates all execution to the graph runner.
 
 from __future__ import annotations
 
+import asyncio
+from uuid import UUID
+
+import httpx
 import typer
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.theme import Theme
 
-from src.graph.graph import build_graph
-from src.graph.runner import invoke_agent
+from src.cli.stream import StreamConsumer
+from src.core.config import get_settings
 
 # ──────────────────────────────────────────────
 # Console configuration
@@ -57,17 +61,93 @@ def _print_banner() -> None:
     )
 
 
+def _get_base_url() -> str:
+    """Resolve the server base URL from config.
+
+    In Docker the server is at ``SERVER_BASE_URL`` (usually ``http://server:8000``).
+    Outside Docker it defaults to ``http://localhost:8000``.
+    """
+    import os
+
+    return os.environ.get("SERVER_BASE_URL", "http://localhost:8000")
+
+
 # ──────────────────────────────────────────────
 # Commands
 # ──────────────────────────────────────────────
 
 
 @app.command()
-def chat() -> None:
+def chat(
+    direct: bool = typer.Option(False, "--direct", help="Run graph directly without the HTTP server"),
+) -> None:
     """🗣️  Start an interactive chat session with DeployAI."""
-    _print_banner()
+    if direct:
+        _chat_direct()
+        return
 
-    console.print("\n[info]Building agent graph...[/info]")
+    _chat_server()
+
+
+def _chat_server() -> None:
+    """Server-first chat: POST to FastAPI, consume SSE."""
+    _print_banner()
+    base_url = _get_base_url()
+    consumer = StreamConsumer(base_url, console)
+
+    # Create or reuse a session
+    session_id: UUID | None = None
+
+    async def _create_session() -> UUID:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(f"{base_url}/sessions", json={"agent": "build"})
+            resp.raise_for_status()
+            return UUID(resp.json()["id"])
+
+    while True:
+        try:
+            user_input = console.input("[bold blue]You > [/bold blue]").strip()
+
+            if not user_input:
+                continue
+            if user_input.lower() in ("quit", "exit", "q", "bye"):
+                console.print("\n[dim]👋 Goodbye![/dim]")
+                raise typer.Exit()
+
+            if session_id is None:
+                session_id = asyncio.run(_create_session())
+
+            # POST message + consume SSE stream in one async block
+            async def _send_and_consume() -> None:
+                async with httpx.AsyncClient() as client:
+                    await client.post(
+                        f"{base_url}/sessions/{session_id}/messages",
+                        json={"content": user_input},
+                    )
+                # Static thinking indicator — tokens stream above it.
+                # Using raw stdout in consumer avoids Rich cursor fights.
+                console.print("[dim]Thinking...[/dim]")
+                await consumer.consume(session_id)
+                console.print()  # newline after response
+
+            asyncio.run(_send_and_consume())
+
+        except KeyboardInterrupt:
+            console.print("\n[dim]👋 Goodbye![/dim]")
+            raise typer.Exit()
+        except typer.Exit:
+            raise
+        except Exception as exc:
+            console.print(f"\n[error]Error: {exc}[/error]\n")
+
+
+def _chat_direct() -> None:
+    """Direct-mode chat (backward compat, no server required)."""
+    from src.graph.graph import build_graph
+    from src.graph.runner import invoke_agent
+
+    _print_banner()
+    console.print("\n[info]Building agent graph (direct mode)...[/info]")
     graph = build_graph()
     console.print("[success]✓ Agent ready![/success]\n")
 
@@ -102,9 +182,43 @@ def chat() -> None:
 @app.command()
 def run(
     message: str = typer.Argument(help="The request to send to the AI agent"),
+    direct: bool = typer.Option(False, "--direct", help="Run graph directly without the HTTP server"),
 ) -> None:
     """⚡ Send a single request to DeployAI and get a response."""
-    console.print("[info]Building agent graph...[/info]")
+    if direct:
+        _run_direct(message)
+        return
+
+    _run_server(message)
+
+
+def _run_server(message: str) -> None:
+    """Server-first one-shot."""
+    base_url = _get_base_url()
+    consumer = StreamConsumer(base_url, console)
+
+    async def _go() -> None:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(f"{base_url}/sessions", json={"agent": "build"})
+            resp.raise_for_status()
+            session_id = UUID(resp.json()["id"])
+
+            await client.post(
+                f"{base_url}/sessions/{session_id}/messages",
+                json={"content": message},
+            )
+
+            await consumer.consume(session_id)
+
+    asyncio.run(_go())
+
+
+def _run_direct(message: str) -> None:
+    """Direct one-shot (backward compat)."""
+    from src.graph.graph import build_graph
+    from src.graph.runner import invoke_agent
+
+    console.print("[info]Building agent graph (direct mode)...[/info]")
     graph = build_graph()
 
     with console.status("[agent]🤖 Working...[/agent]", spinner="dots"):

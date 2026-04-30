@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     mcp_host: str = "0.0.0.0"
     mcp_port: int = Field(default=8811, ge=1024, le=65535)
 
+    # ── MQTT ──────────────────────────────────
+    mqtt_host: str = "localhost"
+    mqtt_port: int = Field(default=1883, ge=1, le=65535)
+
     @property
     def resolved_llm_provider(self) -> str:
         """Determine which LLM provider to use based on config."""

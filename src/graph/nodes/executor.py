@@ -25,12 +25,11 @@ Current Task to Execute:
 
 
 def executor_node(state: AgentState) -> dict:
-    """Execute the current step in the plan.
+    """Execute the current step in the plan, or handle direct conversation.
 
-    Handles three scenarios:
-    1. Plan exhausted → returns empty (no-op).
-    2. Last message is a ToolMessage → the tool finished; advance step.
-    3. Otherwise → invoke the LLM to generate a tool call.
+    Two modes:
+    1. Plan-driven (legacy): execute plan[current_step] via task-specific prompt.
+    2. Plan-less (fast path): pass conversation directly to LLM with tools.
 
     Returns:
         State update with new messages and/or updated step counter.
@@ -38,28 +37,30 @@ def executor_node(state: AgentState) -> dict:
     plan = state.get("plan", [])
     current_step = state.get("current_step", 0)
     messages = state.get("messages", [])
+    llm = get_llm_with_tools()
 
-    # Plan exhausted — nothing to do
+    # ── Plan-less fast path (planner disabled) ──────────────────────
+    if not plan:
+        # If last message is a ToolMessage, the tool just finished.
+        # Invoke LLM again so it can process the result.
+        response = llm.invoke(messages)
+        return {"messages": [response]}
+
+    # ── Plan-driven path (legacy) ───────────────────────────────────
     if current_step >= len(plan):
         return {}
 
-    # Tool just finished → advance to next step
     if messages and isinstance(messages[-1], ToolMessage):
         return {"current_step": current_step + 1}
 
-    # Invoke LLM to execute the current step
     task = plan[current_step]
-    llm = get_llm_with_tools()
-
     sys_msg = SystemMessage(content=EXECUTOR_SYSTEM_PROMPT.format(task=task))
     response = llm.invoke([sys_msg] + messages)
 
-    # If the LLM answered directly (no tool call), count step as done
     if not hasattr(response, "tool_calls") or not response.tool_calls:
         return {
             "messages": [response],
             "current_step": current_step + 1,
         }
 
-    # Tool call → let LangGraph's ToolNode handle execution
     return {"messages": [response]}

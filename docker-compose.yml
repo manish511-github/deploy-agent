@@ -1,14 +1,24 @@
-version: "3.8"
+# ============================================
+# DeployAI Phase 2 — Server-First Docker Compose
+# ============================================
+# Usage:
+#   docker-compose up -d server     # Start the API server
+#   docker-compose run --rm cli     # Run interactive CLI
+#   docker-compose run --rm cli run "list all servers"
+#
+# Phase 2 architecture:
+#   - server: FastAPI + SSE + Postgres
+#   - cli: Typer + Rich that talks to server via HTTP/SSE
+#   - mcp: MCP server (unchanged)
+#   - postgres, mqtt, redis: Infrastructure
+#
+# ──────────────────────────────────────────────
 
-# ============================================
-# DeployAI — Full Stack (Agent + Infrastructure)
-# ============================================
-# Includes PostgreSQL, MQTT, Redis from linux-server-manager
-# plus the AI agent. One command to run everything.
+version: "3.8"
 
 services:
   # ──────────────────────────────────
-  # Infrastructure (same as linux-server-manager)
+  # Infrastructure
   # ──────────────────────────────────
 
   postgres:
@@ -16,9 +26,9 @@ services:
     container_name: deployai-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-lsm_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lsm_password}
-      POSTGRES_DB: ${POSTGRES_DB:-linux_server_manager}
+      POSTGRES_USER: ${POSTGRES_USER:-deployai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-deployai_password}
+      POSTGRES_DB: ${POSTGRES_DB:-deployai}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -27,7 +37,7 @@ services:
     networks:
       - deployai-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lsm_user} -d ${POSTGRES_DB:-linux_server_manager}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-deployai} -d ${POSTGRES_DB:-deployai}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -37,8 +47,8 @@ services:
     container_name: deployai-mqtt
     restart: unless-stopped
     ports:
-      - "${MQTT_PORT:-1883}:1883"
-      - "${MQTT_WS_PORT:-9001}:9001"
+      - "1883:1883"
+      - "9001:9001"
     volumes:
       - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf
       - mqtt_data:/mosquitto/data
@@ -55,7 +65,7 @@ services:
     container_name: deployai-redis
     restart: unless-stopped
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "6379:6379"
     volumes:
       - redis_data:/data
     networks:
@@ -67,7 +77,102 @@ services:
       retries: 5
 
   # ──────────────────────────────────
-  # Test SSH Server (for E2E testing)
+  # DeployAI Server (FastAPI + SSE + Bus)
+  # ──────────────────────────────────
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: deployai-server
+    restart: unless-stopped
+    # Override the Dockerfile ENTRYPOINT ("deploy-ai") so we can run python directly
+    entrypoint: []
+    ports:
+      - "8000:8000"
+    environment:
+      SERVER_MODE: "true"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-deployai}:${POSTGRES_PASSWORD:-deployai_password}@postgres:5432/${POSTGRES_DB:-deployai}
+      MQTT_HOST: mqtt
+      MQTT_PORT: 1883
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-gemini-2.5-flash-lite}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.3}
+      AGENT_API_PORT: 8000
+    volumes:
+      - ./src:/app/src  # Hot reload in dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mqtt:
+        condition: service_healthy
+    networks:
+      - deployai-network
+    command: ["python", "-m", "uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/health\")' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+
+  # ──────────────────────────────────
+  # DeployAI CLI (interactive chat)
+  # ──────────────────────────────────
+
+  cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: deployai-cli
+    restart: "no"
+    stdin_open: true
+    tty: true
+    environment:
+      SERVER_BASE_URL: http://server:8000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-deployai}:${POSTGRES_PASSWORD:-deployai_password}@postgres:5432/${POSTGRES_DB:-deployai}
+    volumes:
+      - ./src:/app/src  # Hot reload in dev
+    depends_on:
+      server:
+        condition: service_healthy
+    networks:
+      - deployai-network
+    command: ["chat"]
+
+  # ──────────────────────────────────
+  # MCP Server (Model Context Protocol)
+  # ──────────────────────────────────
+
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: deployai-mcp
+    restart: unless-stopped
+    entrypoint: ["deploy-ai-mcp"]
+    ports:
+      - "8811:8811"
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-deployai}:${POSTGRES_PASSWORD:-deployai_password}@postgres:5432/${POSTGRES_DB:-deployai}
+      MQTT_HOST: mqtt
+      MQTT_PORT: 1883
+      LLM_MODEL: ${LLM_MODEL:-gemini-2.5-flash-lite}
+    volumes:
+      - ./src:/app/src
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - deployai-network
+    command: ["run", "--transport", "sse"]
+
+  # ──────────────────────────────────
+  # Test Server (for Go agent simulation)
   # ──────────────────────────────────
 
   test-server:
@@ -81,97 +186,12 @@ services:
       - ./test_ssh_key.pub:/root/.ssh/authorized_keys:ro
     networks:
       - deployai-network
-    healthcheck:
-      test: ["CMD-SHELL", "ssh-keygen -l -f /etc/ssh/ssh_host_rsa_key.pub || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-  # ──────────────────────────────────
-  # MCP Server (Model Context Protocol)
-  # ──────────────────────────────────
-
-  mcp-server:
-    build:
-      context: .
-      dockerfile: Dockerfile.mcp
-    container_name: deployai-mcp-server
-    restart: unless-stopped
-    environment:
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-lsm_user}:${POSTGRES_PASSWORD:-lsm_password}@postgres:5432/${POSTGRES_DB:-linux_server_manager}
-      SSH_KEY_PATH: /root/.ssh/id_ed25519
-      SSH_DEFAULT_USER: ${SSH_DEFAULT_USER:-root}
-      SSH_TIMEOUT: ${SSH_TIMEOUT:-30}
-      LLM_MODEL: ${LLM_MODEL:-qwen2.5:1.5b}
-      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0}
-    ports:
-      - "${MCP_PORT:-8811}:8811"
-    volumes:
-      - ./test_ssh_key:/root/.ssh/id_ed25519:ro
-      - ./test_ssh_key.pub:/root/.ssh/id_ed25519.pub:ro
-      - ./src:/app/src
-    depends_on:
-      postgres:
-        condition: service_healthy
-      test-server:
-        condition: service_healthy
-    networks:
-      - deployai-network
-    healthcheck:
-      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8811/sse\")' || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 3
-
-  # ──────────────────────────────────
-  # AI Agent
-  # ──────────────────────────────────
-
-  agent:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: deployai-agent
-    restart: "no"
-    stdin_open: true           # Keep stdin open for interactive chat
-    tty: true                  # Allocate a TTY
-    environment:
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-lsm_user}:${POSTGRES_PASSWORD:-lsm_password}@postgres:5432/${POSTGRES_DB:-linux_server_manager}
-      SSH_KEY_PATH: /root/.ssh/id_ed25519
-      SSH_DEFAULT_USER: ${SSH_DEFAULT_USER:-root}
-      SSH_TIMEOUT: ${SSH_TIMEOUT:-30}
-      LLM_MODEL: ${LLM_MODEL:-qwen2.5:1.5b}
-      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0}
-    volumes:
-      # Mount the dedicated passwordless test SSH key
-      - ./test_ssh_key:/root/.ssh/id_ed25519:ro
-      - ./test_ssh_key.pub:/root/.ssh/id_ed25519.pub:ro
-      # Mount source code for live hot-reloading
-      - ./src:/app/src
-    entrypoint: ["python", "-m", "src.cli.app"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      test-server:
-        condition: service_healthy
-    networks:
-      - deployai-network
+    profiles: ["test"]  # Only started with --profile test
 
 volumes:
   postgres_data:
-    driver: local
   mqtt_data:
-    driver: local
   redis_data:
-    driver: local
 
 networks:
   deployai-network:

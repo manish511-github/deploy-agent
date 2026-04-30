@@ -37,8 +37,8 @@ AUTO_APPROVE_TOOLS = {"get_server_info", "list_all_servers"}
 def _handle_tool_interrupt(graph, state, config) -> object:
     """Handle a tool interrupt by prompting the user for approval.
 
-    Auto-approves non-destructive tools (DB lookups).
-    Prompts for SSH tool calls.
+    Auto-approves non-destructive tools (DB lookups) and low-risk dynamic scripts.
+    Prompts for medium/high risk dynamic scripts and standard agent tasks that modify state.
 
     Returns:
         The graph invocation result after approval/rejection.
@@ -49,43 +49,49 @@ def _handle_tool_interrupt(graph, state, config) -> object:
     last_ai_msg = [m for m in messages if getattr(m, "type", "") == "ai"][-1]
     tool_calls = getattr(last_ai_msg, "tool_calls", [])
 
-    ssh_call = next(
-        (t for t in tool_calls if t["name"] == "ssh_execute"), None
+    # We want to pause for execute_dynamic_script if risk != low
+    # We might also want to pause for send_agent_task if it does a shutdown/restart
+    dynamic_call = next(
+        (t for t in tool_calls if t["name"] == "execute_dynamic_script"), None
     )
 
-    if ssh_call:
-        server_ip = ssh_call["args"].get("server_ip", "Unknown")
-        command = ssh_call["args"].get("command", "Unknown")
+    if dynamic_call:
+        risk_level = dynamic_call["args"].get("risk_level", "medium")
+        if risk_level != "low":
+            server_name = dynamic_call["args"].get("server_name", "Unknown")
+            script = dynamic_call["args"].get("script", "Unknown")
+            description = dynamic_call["args"].get("description", "Unknown")
 
-        console.print()
-        console.print(
-            Panel(
-                f"[bold red]🛑 ACTION REQUIRED[/bold red]\n"
-                f"The AI is requesting permission to run a command via SSH:\n\n"
-                f"[dim]Server:[/dim] [bold]{server_ip}[/bold]\n"
-                f"[dim]Command:[/dim] [bold cyan]{command}[/bold cyan]",
-                border_style="red",
+            console.print()
+            console.print(
+                Panel(
+                    f"[bold red]🛑 ACTION REQUIRED ({risk_level.upper()} RISK)[/bold red]\n"
+                    f"The AI is requesting permission to run a script on the agent:\n\n"
+                    f"[dim]Server:[/dim] [bold]{server_name}[/bold]\n"
+                    f"[dim]Description:[/dim] {description}\n"
+                    f"[dim]Script:[/dim] [bold cyan]{script}[/bold cyan]",
+                    border_style="red",
+                )
             )
-        )
 
-        if not typer.confirm("Do you approve?"):
-            console.print("\n[bold magenta]🛑 Execution cancelled by user.[/bold magenta]")
-            rejection_msg = ToolMessage(
-                tool_call_id=ssh_call["id"],
-                name="ssh_execute",
-                content=(
-                    f"Error: User denied permission to run "
-                    f"command '{command}' on {server_ip}."
-                ),
-            )
-            graph.update_state(
-                config, {"messages": [rejection_msg]}, as_node="tools"
-            )
-            return graph.invoke(None, config=config)
+            if not typer.confirm("Do you approve?"):
+                console.print("\n[bold magenta]🛑 Execution cancelled by user.[/bold magenta]")
+                rejection_msg = ToolMessage(
+                    tool_call_id=dynamic_call["id"],
+                    name="execute_dynamic_script",
+                    content=(
+                        f"Error: User denied permission to run "
+                        f"script '{description}' on {server_name}."
+                    ),
+                )
+                graph.update_state(
+                    config, {"messages": [rejection_msg]}, as_node="tools"
+                )
+                return graph.invoke(None, config=config)
 
-        console.print("\n[bold magenta]🤖 Resuming execution...[/bold magenta]")
+            console.print("\n[bold magenta]🤖 Resuming execution...[/bold magenta]")
 
-    # Auto-approve non-SSH tools or approved SSH
+    # Auto-approve non-destructive tools or approved scripts
     return graph.invoke(None, config=config)
 
 

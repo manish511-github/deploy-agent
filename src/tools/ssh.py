@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 
-from src.infrastructure.repository import PostgresServerRepository
+from src.fleet.repository import PostgresServerRepository
 from src.infrastructure.ssh_client import SSHClient
-from src.core.exceptions import SSHError
+from src.core.exceptions import SSHError, DatabaseError
 
 
 @tool
@@ -31,20 +31,22 @@ def ssh_execute(server_ip: str, command: str, username: str | None = None) -> st
     Returns:
         Command output (stdout). If there are errors, stderr is included.
     """
-    ssh = SSHClient()
-    resolved_ip = server_ip
-
-    # Auto-resolve: if it doesn't look like an IP, look it up in the DB
-    if not SSHClient.is_ip_address(server_ip):
-        repo = PostgresServerRepository()
-        ip = repo.resolve_ip(server_ip)
-        if ip is None:
-            # Fall back to using the raw value (could be a Docker hostname)
-            resolved_ip = server_ip
-        else:
-            resolved_ip = ip
-
     try:
+        ssh = SSHClient()
+        resolved_ip = server_ip
+
+        # Auto-resolve: if it doesn't look like an IP, look it up in the DB
+        if not SSHClient.is_ip_address(server_ip):
+            repo = PostgresServerRepository()
+            ip = repo.resolve_ip(server_ip)
+            if ip is None:
+                # Fall back to using the raw value (could be a Docker hostname)
+                resolved_ip = server_ip
+            else:
+                resolved_ip = ip
+
         return ssh.execute(resolved_ip, command, username)
-    except SSHError as exc:
+    except (SSHError, DatabaseError) as exc:
         return f"ERROR: {exc}"
+    except Exception as exc:
+        return f"CRITICAL ERROR: An unexpected error occurred: {exc}"

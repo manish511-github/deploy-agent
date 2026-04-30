@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 
-from src.infrastructure.repository import PostgresServerRepository
+from src.fleet.repository import PostgresServerRepository
 from src.core.exceptions import DatabaseError
 
 
@@ -52,6 +52,8 @@ def get_server_info(identifier: str) -> str:
 
     except DatabaseError as exc:
         return f"ERROR: {exc}"
+    except Exception as exc:
+        return f"CRITICAL ERROR: {exc}"
 
 
 @tool
@@ -95,3 +97,5 @@ def list_all_servers() -> str:
 
     except DatabaseError as exc:
         return f"ERROR: {exc}"
+    except Exception as exc:
+        return f"CRITICAL ERROR: {exc}"

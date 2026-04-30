@@ -27,7 +27,7 @@ mcp = FastMCP(
     "deploy-ai",
     instructions=(
         "DeployAI — AI-powered Linux server management. "
-        "Provides SSH command execution, server lookup, and fleet listing "
+        "Provides agent-based script execution, server lookup, and fleet listing "
         "against a PostgreSQL-backed server inventory."
     ),
     host=_settings.mcp_host,
@@ -41,25 +41,56 @@ mcp = FastMCP(
 
 
 @mcp.tool()
-def ssh_execute(server_ip: str, command: str, username: str | None = None) -> str:
-    """Execute a shell command on a remote Linux server via SSH.
-
-    Use this tool when you need to run a command on a server. You can pass
-    either the server's IP address OR its name/hostname — it will auto-resolve.
+async def execute_agent_script(server_name: str, script: str, description: str) -> str:
+    """Execute a shell script on a remote server using the Go agent queue.
 
     Args:
-        server_ip: IP address, hostname, or server name of the target server.
-        command: The shell command to execute on the server.
-        username: SSH username. Defaults to configured default (usually root).
+        server_name: Target server hostname or name.
+        script: The full bash script to execute.
+        description: Human-readable explanation of what this script does.
 
     Returns:
-        Command output (stdout). If there are errors, stderr is included.
+        stdout/stderr output from the script execution.
     """
-    from src.tools.ssh import ssh_execute as _ssh_execute
+    from src.tools.agent_task import execute_dynamic_script as _exec
 
-    return _ssh_execute.invoke(
-        {"server_ip": server_ip, "command": command, "username": username}
-    )
+    try:
+        return await _exec.ainvoke(
+            {
+                "server_name": server_name,
+                "script": script,
+                "description": description,
+                "risk_level": "medium",
+            }
+        )
+    except Exception as exc:
+        return f"ERROR: Agent execution failed: {exc}"
+
+
+@mcp.tool()
+async def send_agent_action(server_name: str, task_type: str, payload: dict | None = None) -> str:
+    """Send a structured task (like system.info or device.lock) to the Go agent.
+    
+    Args:
+        server_name: Target server hostname or name.
+        task_type: Type of task (e.g. system.info).
+        payload: Task-specific payload.
+        
+    Returns:
+        JSON response from the agent.
+    """
+    from src.tools.agent_task import send_agent_task as _send
+
+    try:
+        return await _send.ainvoke(
+            {
+                "server_name": server_name,
+                "task_type": task_type,
+                "payload": payload or {},
+            }
+        )
+    except Exception as exc:
+        return f"ERROR: Task dispatch failed: {exc}"
 
 
 @mcp.tool()
@@ -126,7 +157,7 @@ def server_health_check(server_name: str) -> str:
         f"Perform a full health check on the server '{server_name}'.\n\n"
         f"Steps:\n"
         f"1. Look up the server using get_server_info\n"
-        f"2. Run these diagnostic commands via ssh_execute:\n"
+        f"2. Run these diagnostic commands via execute_agent_script:\n"
         f"   - uptime\n"
         f"   - free -h\n"
         f"   - df -h\n"

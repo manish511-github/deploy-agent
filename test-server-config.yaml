@@ -1,0 +1,23 @@
+### MQTT Parameters
+mqtt:
+  broker_address: "mqtt"
+  broker_port: 1883
+  username: ""
+  password: ""
+  device_id: 1
+
+mqtt_channel:
+  host: "test-server"
+  platform: 6
+
+### Server API Parameters
+server_api:
+  base_url: "http://host.docker.internal:8000"
+  linux_server_endpoint: "/agent/v1/server/"
+  linux_enroll_endpoint: "/agent/v1/enroll"
+  linux_checkin_endpoint: "/agent/v1/checkin"
+
+### Agent Settings
+agent:
+  log_level: "info"    # debug | info | warn | error
+  log_file: "/var/log/zdeploy-agent.log" # empty = stdout, or path like /var/log/zdeploy-agent.log
