@@ -38,6 +38,9 @@ dependencies = [
 
     # Checkpointer
     "langgraph-checkpoint-postgres>=2.0",
+
+    # Encryption
+    "cryptography>=42.0",
 ]
 
 [project.optional-dependencies]

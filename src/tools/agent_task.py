@@ -40,16 +40,17 @@ async def _send_task_impl(
     mqtt.wake_device(mqtt_topic)
     
     # 3. Wait for result (poll DB)
-    poll_interval = 1.0
+    # Use adaptive interval: fast at first, slower after 10s
     elapsed = 0.0
     while elapsed < wait_timeout:
         result = service.get_task_result(task.task_id)
         if result:
             return json.dumps(result, indent=2)
-            
+
+        poll_interval = 0.5 if elapsed < 10 else 2.0
         await asyncio.sleep(poll_interval)
         elapsed += poll_interval
-        
+
     return f"Agent did not respond within {wait_timeout} seconds timeout."
 
 @tool
@@ -112,5 +113,5 @@ async def execute_dynamic_script(
                 "generated_by": "ai_agent",
             }
         },
-        wait_timeout=120
+        wait_timeout=180
     )

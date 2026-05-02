@@ -1,29 +1,54 @@
 # ============================================
-# Test SSH Server — Lightweight Alpine + OpenSSH
+# Test Agent Server — Ubuntu 22.04 slim
 # ============================================
-# A minimal SSH server for testing the DeployAI agent's
-# SSH execution tool inside Docker Compose.
+# Simulates a real Ubuntu server that users would enroll.
+# Includes: SSH, kubectl, curl (for k3s install), Go agent binary.
+#
+# k3s is NOT pre-installed — the Go agent's enrollment flow
+# installs it automatically at first run.
 
-FROM alpine:3.19
+FROM ubuntu:22.04
 
-# Install OpenSSH server and basic diagnostic tools
-RUN apk add --no-cache \
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Core tools + SSH server
+RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server \
-    bash \
-    coreutils \
-    procps \
     curl \
-    && ssh-keygen -A \
-    && mkdir -p /root/.ssh \
-    && chmod 700 /root/.ssh
+    ca-certificates \
+    bash \
+    procps \
+    iproute2 \
+    iptables \
+    conntrack \
+    socat \
+    && rm -rf /var/lib/apt/lists/*
 
-# Configure SSH for root login with key-based auth
-RUN sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config && \
-    sed -i 's/#PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config && \
-    sed -i 's/#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config && \
-    echo "root:testpassword" | chpasswd
+# Install kubectl (same version k3s ships with)
+RUN curl -fsSL https://dl.k8s.io/release/v1.29.0/bin/linux/amd64/kubectl \
+    -o /usr/local/bin/kubectl \
+    && chmod +x /usr/local/bin/kubectl
+
+# SSH setup
+RUN mkdir -p /run/sshd /root/.ssh \
+    && chmod 700 /root/.ssh \
+    && ssh-keygen -A \
+    && sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config \
+    && sed -i 's/#PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config \
+    && sed -i 's/#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config \
+    && echo "root:testpassword" | chpasswd
+
+# Directories the Go agent and k3s will write to
+RUN mkdir -p /etc/zdeploy-agent /var/log /etc/rancher/k3s
+
+# Copy the pre-built Go agent binary
+COPY zdeploy-agent-linux-amd64 /usr/local/bin/zdeploy-agent
+RUN chmod +x /usr/local/bin/zdeploy-agent
+
+# Startup script: runs sshd in background, then starts the Go agent
+COPY scripts/test-server-start.sh /usr/local/bin/start.sh
+RUN chmod +x /usr/local/bin/start.sh
 
 EXPOSE 22
 
-# The authorized_keys file will be mounted via docker-compose
-CMD ["/usr/sbin/sshd", "-D", "-e"]
+CMD ["/usr/local/bin/start.sh"]

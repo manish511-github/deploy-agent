@@ -182,16 +182,24 @@ services:
     container_name: deployai-test-server
     hostname: test-server
     restart: unless-stopped
+    # privileged + cgroup settings required for k3s to run inside Docker
+    privileged: true
+    # cgroup: host  # Removed - not supported in this version
     volumes:
-      - ./test_ssh_key.pub:/root/.ssh/authorized_keys:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - k3s_data:/var/lib/rancher
     networks:
       - deployai-network
+    depends_on:
+      - mqtt
+      - server
     profiles: ["test"]  # Only started with --profile test
 
 volumes:
   postgres_data:
   mqtt_data:
   redis_data:
+  k3s_data:
 
 networks:
   deployai-network:

@@ -76,24 +76,30 @@ class StreamConsumer:
 
                         case EventType.TOOL_RESULT:
                             result = event.payload.get("result", "")
+                            tool = event.payload.get("tool", "")
                             if in_text_block:
                                 self.console.print()
                                 in_text_block = False
                             self.console.print(
                                 Panel(
-                                    result[:800],
+                                    result,
                                     border_style="green",
-                                    title="Result",
+                                    title=f"Result: {tool}" if tool else "Result",
                                 )
                             )
 
                         case EventType.TOOL_ERROR:
                             err = event.payload.get("error", "")
+                            tool = event.payload.get("tool", "")
                             if in_text_block:
                                 self.console.print()
                                 in_text_block = False
                             self.console.print(
-                                Panel(err, border_style="red", title="Error")
+                                Panel(
+                                    err,
+                                    border_style="red",
+                                    title=f"[bold red]Tool Error: {tool}[/bold red]",
+                                )
                             )
 
                         case EventType.PERMISSION_ASKED:
@@ -127,7 +133,13 @@ class StreamConsumer:
                             if in_text_block:
                                 self.console.print()
                                 in_text_block = False
-                            self.console.print(f"\n[bold red]Error: {err}[/bold red]")
+                            self.console.print(
+                                Panel(
+                                    err,
+                                    border_style="red",
+                                    title="[bold red]Agent Error[/bold red]",
+                                )
+                            )
                             return text_buffer
 
         return text_buffer

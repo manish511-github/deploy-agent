@@ -1,0 +1,23 @@
+### Go Agent config for test-server container
+### broker_address uses the Docker service name
+
+mqtt:
+  broker_address: "deployai-mqtt"
+  broker_port: 1883
+  username: ""
+  password: ""
+  device_id: 1
+
+mqtt_channel:
+  host: "test-server"
+  platform: 6
+
+server_api:
+  base_url: "http://deployai-server:8000"
+  task_path: "/agent/v1/server/"
+  enroll_path: "/agent/v1/enroll"
+  checkin_path: "/agent/v1/checkin"
+
+agent:
+  log_level: "debug"
+  log_file: ""

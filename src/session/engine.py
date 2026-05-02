@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import traceback
 import warnings
 from typing import Any
 from uuid import UUID
@@ -98,7 +99,11 @@ class PermissionToolWrapper(BaseTool):
             logger.warning("Permission denied for %s: %s", self.wrapped.name, exc)
             return f"Permission denied: {exc}"
 
-        return await self.wrapped.ainvoke(kwargs)
+        # Pass empty callbacks so the inner tool's ainvoke() does NOT fire
+        # a second set of on_tool_start/on_tool_end events. The outer
+        # PermissionToolWrapper invocation already emits those via LangGraph's
+        # ToolNode — without this, every tool result appears twice in the UI.
+        return await self.wrapped.ainvoke(kwargs, config={"callbacks": []})
 
 
 class SessionEngine:
@@ -196,29 +201,34 @@ class SessionEngine:
                         )
 
                 elif kind == "on_tool_start":
-                    await self.bus.publish_event(
-                        Event(
-                            event_type=EventType.TOOL_START,
-                            session_id=session_id,
-                            payload={"tool": name},
+                    # Only emit for the top-level PermissionToolWrapper invocation.
+                    # The inner tool is now called via _arun (not ainvoke), so it
+                    # does NOT fire its own on_tool_start/on_tool_end events.
+                    if metadata.get("langgraph_node") == "tools":
+                        await self.bus.publish_event(
+                            Event(
+                                event_type=EventType.TOOL_START,
+                                session_id=session_id,
+                                payload={"tool": name},
+                            )
                         )
-                    )
 
                 elif kind == "on_tool_end":
-                    output = data.get("output", "")
-                    # LangGraph ToolNode returns a ToolMessage object.
-                    # Extract its .content field for human-readable display.
-                    if hasattr(output, "content"):
-                        result_text = str(output.content)
-                    else:
-                        result_text = str(output)
-                    await self.bus.publish_event(
-                        Event(
-                            event_type=EventType.TOOL_RESULT,
-                            session_id=session_id,
-                            payload={"tool": name, "result": result_text[:2000]},
+                    if metadata.get("langgraph_node") == "tools":
+                        output = data.get("output", "")
+                        # LangGraph ToolNode returns a ToolMessage object.
+                        # Extract its .content field for human-readable display.
+                        if hasattr(output, "content"):
+                            result_text = str(output.content)
+                        else:
+                            result_text = str(output)
+                        await self.bus.publish_event(
+                            Event(
+                                event_type=EventType.TOOL_RESULT,
+                                session_id=session_id,
+                                payload={"tool": name, "result": result_text[:2000]},
+                            )
                         )
-                    )
 
             logger.info(
                 "[session %s] Stream complete. Events: %d, Executor text: %d chars",
@@ -245,12 +255,14 @@ class SessionEngine:
                 )
 
         except Exception as exc:
+            tb = traceback.format_exc()
             logger.exception("[session %s] Engine error", session_id)
+            error_msg = str(exc) or type(exc).__name__
             await self.bus.publish_event(
                 Event(
                     event_type=EventType.ERROR,
                     session_id=session_id,
-                    payload={"error": str(exc)},
+                    payload={"error": f"{error_msg}\n\n{tb}"},
                 )
             )
 
@@ -261,8 +273,10 @@ class SessionEngine:
         """
         from src.permission.ruleset import Rule
         return [
-            Rule(permission="exec_script", pattern="rm -rf /*", action="deny"),
+            Rule(permission="execute_dynamic_script", pattern="risk=high", action="ask"),
+            Rule(permission="execute_dynamic_script", pattern="risk=medium", action="ask"),
             Rule(permission="send_agent_task", pattern="device.restart", action="ask"),
             Rule(permission="send_agent_task", pattern="device.shutdown", action="ask"),
+            Rule(permission="send_agent_task", pattern="device.wipe", action="ask"),
             Rule(permission="*", pattern="*", action="allow"),
         ]

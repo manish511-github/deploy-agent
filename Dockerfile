@@ -55,6 +55,10 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Copy application source (for mounted volume overrides in dev)
 COPY src/ ./src/
 
+# Copy Go agent binaries (served via /agent/download/{arch})
+COPY zdeploy-agent-linux-amd64 ./zdeploy-agent-linux-amd64
+COPY zdeploy-agent-linux-arm64 ./zdeploy-agent-linux-arm64
+
 # Create SSH directory for key mounting
 RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh
 
